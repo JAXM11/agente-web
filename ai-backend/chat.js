@@ -1,10 +1,13 @@
 const { randomUUID, randomBytes, createHash } = require('node:crypto');
 const { OpenAI } = require('openai');
 const store = require('./database');
+const { runAgent } = require('./agent');
 
 const openrouter = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY,
+  timeout: 30000,
+  maxRetries: 1,
   defaultHeaders: { 'X-Title': 'Mi Aplicativo Web' },
 });
 const activeSessions = new Set();
@@ -42,16 +45,11 @@ async function chat(req, res) {
   activeSessions.add(id);
   try {
     const messages = [...store.history(id), { role: 'user', content: message.trim() }];
-    const completion = await openrouter.chat.completions.create({
-      model: 'openai/gpt-4o-mini',
-      messages,
-    });
-    const reply = completion.choices[0]?.message?.content;
-    if (typeof reply !== 'string' || !reply.trim()) throw new Error('Respuesta vacía del proveedor');
+    const { reply, toolsUsed } = await runAgent(messages, { client: openrouter });
 
     store.saveTurn(id, sessionToken ? hashToken(sessionToken) : null, message.trim(), reply);
     // Respuesta normal JSON, una de las alternativas del diagrama.
-    res.json({ reply, sessionId: id, ...(sessionToken ? { sessionToken } : {}) });
+    res.json({ reply, toolsUsed, sessionId: id, ...(sessionToken ? { sessionToken } : {}) });
   } catch (error) {
     console.error('Error al procesar el chat:', error.message);
     res.status(500).json({ error: 'Error interno al procesar la solicitud con la IA' });
